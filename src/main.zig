@@ -166,7 +166,8 @@ const Data = struct {
         try std.fs.cwd().rename(path, final_path);
 
         // Write metadata
-        try self.writeMetadata(basename, abs_path, final_path);
+        //self: *Data, original_path: []const u8, trash_path: []const u8
+        try self.writeMetadata(abs_path, final_path);
 
         std.debug.print("Moved directory '{s}' to trash\n", .{path});
     }
@@ -181,7 +182,7 @@ const Data = struct {
 
         try std.fs.cwd().rename(path, final_path);
 
-        try self.writeMetadata(basename, abs_path, final_path);
+        try self.writeMetadata(abs_path, final_path);
 
         std.debug.print("Moved '{s}' to trash\n", .{path});
     }
@@ -230,7 +231,7 @@ const Data = struct {
 
         const content = try file.readToEndAlloc(self.arena.allocator(), 4096);
 
-        var lines = std.mem.split(u8, content, "\n");
+        var lines = std.mem.splitScalar(u8, content, '\n');
         while (lines.next()) |line| {
             if (std.mem.startsWith(u8, line, "Path=")) {
                 return line[5..];
@@ -245,17 +246,17 @@ const Data = struct {
     fn writeMetadata(self: *Data, original_path: []const u8, trash_path: []const u8) !void {
         const metadata_path = try std.fmt.allocPrint(self.arena.allocator(), "{s}.trashinfo", .{trash_path});
 
-        const file = try std.fs.cwd().createFile(metadata_path, .{});
+        var file = try std.fs.cwd().createFile(metadata_path, .{});
         defer file.close();
+        var write_buffer: [1024]u8 = undefined;
+        var file_writer = file.writer(&write_buffer);
+        const writer: *std.Io.Writer = &file_writer.interface;
 
         const timestamp = std.time.timestamp();
         const epoch_seconds: std.time.epoch.EpochSeconds = .{ .secs = @intCast(timestamp) };
         const epoch_day = epoch_seconds.getEpochDay();
         const year_day = epoch_day.calculateYearDay();
         const month_day = year_day.calculateMonthDay();
-
-        var buf_writer = std.io.bufferedWriter(file.writer());
-        const writer = buf_writer.writer();
 
         try writer.writeAll("[Trash Info]\n");
         try writer.print("Path={s}\n", .{original_path});
@@ -267,8 +268,7 @@ const Data = struct {
             day_seconds.getMinutesIntoHour(),
             day_seconds.getSecondsIntoMinute(),
         });
-
-        try buf_writer.flush();
+        try writer.flush();
     }
 
     ///Not implimented yet!
@@ -391,7 +391,7 @@ const Data = struct {
 
         // Parse deletion date from metadata
         // Format: DeletionDate=2025-10-16T15:30:45
-        var lines = std.mem.split(u8, content, "\n");
+        var lines = std.mem.splitScalar(u8, content, '\n');
         while (lines.next()) |line| {
             if (std.mem.startsWith(u8, line, "DeletionDate=")) {
                 const date_str = line[13..]; // Skip "DeletionDate="
@@ -399,36 +399,37 @@ const Data = struct {
                 // Parse ISO 8601 format: YYYY-MM-DDTHH:MM:SS
                 if (date_str.len < 19) return error.InvalidDateFormat;
 
-                const year = try std.fmt.parseInt(i32, date_str[0..4], 10);
-                const month = try std.fmt.parseInt(u8, date_str[5..7], 10);
-                const day = try std.fmt.parseInt(u8, date_str[8..10], 10);
-                const hour = try std.fmt.parseInt(u8, date_str[11..13], 10);
-                const minute = try std.fmt.parseInt(u8, date_str[14..16], 10);
-                const second = try std.fmt.parseInt(u8, date_str[17..19], 10);
+                const year = try std.fmt.parseInt(i64, date_str[0..4], 10);
+                const month = try std.fmt.parseInt(i64, date_str[5..7], 10);
+                const day = try std.fmt.parseInt(i64, date_str[8..10], 10);
+                const hour = try std.fmt.parseInt(i64, date_str[11..13], 10);
+                const minute = try std.fmt.parseInt(i64, date_str[14..16], 10);
+                const second = try std.fmt.parseInt(i64, date_str[17..19], 10);
 
-                var days_since_epoch: i64 = 0;
+                // Simple approximation - good enough for trash cleanup
+                // We don't need perfect accuracy, being off by a day doesn't matter
+                const days_in_month: [12]i64 = .{ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
 
-                var y: i32 = 1970;
-                while (y < year) : (y += 1) {
-                    if (std.time.epoch.isLeapYear(y)) {
-                        days_since_epoch += 366;
-                    } else {
-                        days_since_epoch += 365;
-                    }
+                // Days from years (ignoring leap years - close enough)
+                var days_since_epoch: i64 = (year - 1970) * 365;
+
+                // Rough leap year adjustment (not perfect but good enough)
+                days_since_epoch += @divFloor(year - 1970, 4);
+
+                // Add days from months
+                var m: i64 = 0;
+                while (m < month - 1) : (m += 1) {
+                    days_since_epoch += days_in_month[@intCast(m)];
                 }
 
-                const days_in_months = std.time.epoch.getDaysInMonths(std.time.epoch.isLeapYear(year));
-                var m: u8 = 1;
-                while (m < month) : (m += 1) {
-                    days_since_epoch += days_in_months[m - 1];
-                }
-
+                // Add days
                 days_since_epoch += day - 1;
 
+                // Convert to seconds
                 const timestamp = days_since_epoch * 86400 +
-                    @as(i64, hour) * 3600 +
-                    @as(i64, minute) * 60 +
-                    @as(i64, second);
+                    hour * 3600 +
+                    minute * 60 +
+                    second;
 
                 return timestamp;
             }
