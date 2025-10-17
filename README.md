@@ -1,4 +1,4 @@
-# Trash - A Safe File Deletion Utility
+# zrm - A Safe File Deletion Utility
 
 A modern replacement for `rm` written in Zig that moves files to trash instead of permanently deleting them, giving you a safety net for accidental deletions.
 
@@ -8,21 +8,36 @@ Inspired by the Rust community's movement to rewrite classic Unix utilities with
 
 ## ⚠️ Development Status
 
-**This project is currently in active development.** Core functionality is working, but some features are still being implemented.
+**This project is currently in active development.** Core functionality is working, but several features are still being implemented.
 
 ### ✅ Implemented Features
 
 - ✅ Move files to trash instead of permanent deletion
 - ✅ Recursive directory deletion (`-r` flag)
 - ✅ Metadata tracking (original path, deletion timestamp)
-- ✅ Smart conflict resolution (replaces files from same location)
+- ✅ Duplicate file handling with numeric suffixes
 - ✅ Manual trash management (`--empty`, `--clear <days>`)
+- ✅ Show trash directory location (`--dir`)
 - ✅ FreeDesktop.org Trash specification compliance
+- ✅ Age-based automatic cleanup
 
-### 🚧 In Progress / Planned Features
+### 🚧 Planned Features (In Priority Order)
 
-- 🚧 `--restore` - Interactive restore of deleted files
-- 🚧 `--restoreAll` - Restore all files from current directory
+#### Phase 1: Core Restoration (Next)
+- 🚧 `--list` - Display all files currently in trash with details
+- 🚧 `--restore` - Interactive menu to restore deleted files
+- 🚧 `--restoreAll` - Automatically restore all non-conflicting files from current directory
+
+#### Phase 2: Enhanced Management
+- 🚧 `--search <pattern>` - Find specific files in trash by name/pattern
+- 🚧 `--rm <pattern>` - Permanently delete specific items from trash
+- 🚧 `--size` - Show total size of trash directory
+
+#### Phase 3: Quality of Life
+- 🚧 Conflict resolution on restore (rename/skip/overwrite options)
+- 🚧 `--dry-run` - Preview operations without executing
+- 🚧 Batch operations optimization
+- 🚧 Better error messages and user feedback
 
 ## 🚀 Installation
 
@@ -33,25 +48,35 @@ Inspired by the Rust community's movement to rewrite classic Unix utilities with
 ### Building from Source
 
 ```bash
-git clone https://github.com/yourusername/trash.git
-cd trash
+git clone https://github.com/yourusername/zrm.git
+cd zrm
 zig build-exe main.zig -O ReleaseFast
-sudo mv trash /usr/local/bin/
+sudo mv zrm /usr/local/bin/
 ```
 
 ### Optional: Create an Alias
 
-For muscle memory convenience, you can alias `rm` to `zrm` but I **strongly suggest against this**. If you don't want to use rm I suggest aliasing it to something that tells you not to use it.:
-
-### Optional: Auto delete everything older than X days in the trash:
-I sugest using crontab 
-Once I get everything set up I will test it out and place the exact command here.
-Trash cli recomends the following:
+For muscle memory convenience, you can alias `rm` to `zrm`, but I **strongly suggest against this**. If you absolutely don't want to use `rm`, I suggest aliasing it to something that reminds you not to:
 
 ```bash
-(crontab -l ; echo "@daily $(which trash-empty) 30") | crontab -
+# In your ~/.bashrc or ~/.zshrc
+alias rm='echo "Use zrm instead, dummy"'
 ```
 
+### Optional: Automatic Trash Cleanup
+
+Set up a cron job to automatically delete files older than X days:
+
+```bash
+# Delete files older than 30 days every day at 2 AM
+(crontab -l 2>/dev/null; echo "0 2 * * * $(which zrm) --clear 30") | crontab -
+```
+
+Or using the `@daily` shorthand:
+
+```bash
+(crontab -l 2>/dev/null; echo "@daily $(which zrm) --clear 30") | crontab -
+```
 
 ## 📖 Usage
 
@@ -59,59 +84,87 @@ Trash cli recomends the following:
 
 ```bash
 # Delete a file (moves to trash)
-trash file.txt
+zrm file.txt
 
 # Delete multiple files
-trash file1.txt file2.txt file3.txt
+zrm file1.txt file2.txt file3.txt
 
 # Delete a directory (recursive)
-trash -r my_directory/
+zrm -r my_directory/
+
+# Delete multiple directories
+zrm -r dir1/ dir2/ dir3/
 ```
 
 ### Trash Management
 
 ```bash
 # View trash directory location
-trash --dir
+zrm --dir
 
-# Empty entire trash
-trash --empty
+# Empty entire trash (permanent deletion!)
+zrm --empty
 
 # Delete items older than 30 days
-trash --clear 30
+zrm --clear 30
 
 # Delete items older than 7 days
-trash --clear 7
+zrm --clear 7
+```
+
+### File Recovery (Coming Soon)
+
+```bash
+# List all files in trash
+zrm --list
+
+# Interactive restore menu
+zrm --restore
+
+# Restore all files from current directory that don't conflict
+zrm --restoreAll
+
+# Search for specific files in trash
+zrm --search myfile.txt
 ```
 
 ### Help
 
 ```bash
-trash --help
+zrm --help
+zrm -h
 ```
 
 ## 🗂️ How It Works
 
 ### Trash Location
 
-Files are moved to `~/.local/share/Trash/files/` following the [FreeDesktop.org Trash specification](https://specifications.freedesktop.org/trash-spec/trashspec-latest.html). 
-Meta data is moved to `~/.local/share/Trash/info/`. If you renamed a directory and need to manually restore I suggest looking 
-through the meta data to ensure you are recovering the correct file and I also suggest you delete the meta data file 
-after you move it. Will also impliment a force restore where you can specify the exact file you want back even if it doesn't 
-match that way we can do the cleanup for you
+Files are moved to `~/.local/share/Trash/files/` following the [FreeDesktop.org Trash specification](https://specifications.freedesktop.org/trash-spec/trashspec-latest.html).
 
-### Metadata
+Metadata is stored in `~/.local/share/Trash/info/` as `.trashinfo` files containing:
+- Original file path
+- Deletion timestamp (ISO 8601 format)
 
-For each deleted file, a `.trashinfo` metadata file is created and as it said above we are compliant with the speccification provided by the [FreeDesktop.org Trash specification](https://specifications.freedesktop.org/trash-spec/trashspec-latest.html). 
+### Metadata Format
 
-### Conflict Resolution
+Each deleted file gets a corresponding `.trashinfo` file:
 
-When deleting a file that already exists in trash:
+```ini
+[Trash Info]
+Path=/home/user/documents/important.txt
+DeletionDate=2025-10-17T14:30:00
+```
 
-1. **Same file from same location** → Old version is replaced
-2. **Different file with same name** → Timestamp is appended (e.g., `file.txt.1729095234`)
+### Duplicate Handling
 
-This prevents trash bloat from repeatedly deleting and re-creating the same files during development.
+When deleting a file with a name that already exists in trash:
+
+1. **First instance** → `file.txt`
+2. **Second instance** → `file.txt_1`
+3. **Third instance** → `file.txt_2`
+4. And so on...
+
+This prevents trash bloat and maintains all versions of files with the same basename.
 
 ## 🤔 Why Zig?
 
@@ -120,21 +173,54 @@ Zig offers several advantages for system utilities:
 - **No hidden allocations** - Explicit memory management without garbage collection overhead
 - **Compile-time guarantees** - Catch errors before runtime
 - **C interop** - Easy integration with system APIs
-- **Performance** - Compiles to fast, native code
+- **Performance** - Compiles to fast, native code comparable to C
 - **Safety** - Built-in error handling and bounds checking
+- **Simplicity** - Clear, readable code without C's footguns
 
 This project serves as both a useful tool and a learning exercise in building practical CLI applications with Zig.
+
+## 🏗️ Development Roadmap
+
+### Milestone 1: Core Trash Operations (✅ COMPLETE)
+- [x] Basic file deletion
+- [x] Recursive directory deletion
+- [x] Metadata generation
+- [x] Duplicate handling
+- [x] Empty trash
+- [x] Clear old files
+
+### Milestone 2: File Recovery (🚧 IN PROGRESS)
+- [ ] List trash contents
+- [ ] Parse and display metadata
+- [ ] Interactive restore
+- [ ] Automatic restore all
+- [ ] Search functionality
+
+### Milestone 3: Enhanced Features (📋 PLANNED)
+- [ ] Permanent deletion from trash
+- [ ] Trash size reporting
+- [ ] Dry run mode
+- [ ] Better conflict resolution
+- [ ] Progress indicators for large operations
+
+### Milestone 4: Polish & Release (📋 PLANNED)
+- [ ] Comprehensive error handling
+- [ ] Man page documentation
+- [ ] Shell completions (bash, zsh, fish)
+- [ ] Binary releases for common platforms
+- [ ] Performance benchmarks vs trash-cli
 
 ## 🤝 Contributing
 
 Contributions are welcome! This is a learning project, so feel free to:
 
-- Report bugs
-- Suggest features
+- Report bugs or issues
+- Suggest features or improvements
 - Submit pull requests
 - Improve documentation
+- Share performance insights
 
-Please open an issue before starting work on major features.
+Please open an issue before starting work on major features to discuss the approach.
 
 ## 📝 License
 
@@ -142,11 +228,17 @@ MIT License - See LICENSE file for details
 
 ## 🙏 Acknowledgments
 
-- Inspired by the Rust CLI tools renaissance
-- FreeDesktop.org for the Trash specification
+- Inspired by the Rust CLI tools renaissance (`ripgrep`, `bat`, `exa`, `fd`)
+- [FreeDesktop.org](https://freedesktop.org/) for the Trash specification
 - The Zig community for excellent documentation and support
-- [trash-cli](https://github.com/andreafrancia/trash-cli) was the major inspiration it was what I personally used as my rm until I wrote this
+- [trash-cli](https://github.com/andreafrancia/trash-cli) - The Python implementation that inspired this project
+
+## 🔗 Similar Projects
+
+- [trash-cli](https://github.com/andreafrancia/trash-cli) - Python implementation (what this replaces)
+- [trashy](https://github.com/oberblastmeister/trashy) - Rust implementation
+- [gio trash](https://developer.gnome.org/gio/stable/gio.html) - GNOME's built-in trash utility
 
 ---
 
-**Note:** This is a personal project under active development. Use at your own risk and always maintain backups of important data.
+**Note:** This is a personal learning project under active development. While functional, always maintain backups of important data. Test thoroughly before using in production environments.
