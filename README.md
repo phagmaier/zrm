@@ -23,11 +23,6 @@ Inspired by the Rust community's movement to rewrite classic Unix utilities with
 
 - 🚧 `--restore` - Interactive restore of deleted files
 - 🚧 `--restoreAll` - Restore all files from current directory
-- 📋 Configuration file support (`~/.config/trash/config`)
-- 📋 Optional automatic cleanup (configurable age-based deletion)
-- 📋 Colorized output
-- 📋 Progress indicators for large operations
-- 📋 Tab completion for shells
 
 ## 🚀 Installation
 
@@ -46,14 +41,17 @@ sudo mv trash /usr/local/bin/
 
 ### Optional: Create an Alias
 
-For muscle memory convenience, you can alias `rm` to `trash`:
+For muscle memory convenience, you can alias `rm` to `zrm` but I **strongly suggest against this**. If you don't want to use rm I suggest aliasing it to something that tells you not to use it.:
+
+### Optional: Auto delete everything older than X days in the trash:
+I sugest using crontab 
+Once I get everything set up I will test it out and place the exact command here.
+Trash cli recomends the following:
 
 ```bash
-# Add to your ~/.bashrc or ~/.zshrc
-alias rm='trash'
+(crontab -l ; echo "@daily $(which trash-empty) 30") | crontab -
 ```
 
-**Warning:** Only do this if you're comfortable with the behavior change. You can always use `/bin/rm` for actual permanent deletion.
 
 ## 📖 Usage
 
@@ -96,14 +94,15 @@ trash --help
 
 ### Trash Location
 
-Files are moved to `~/.local/share/Trash/files/` following the [FreeDesktop.org Trash specification](https://specifications.freedesktop.org/trash-spec/trashspec-latest.html).
+Files are moved to `~/.local/share/Trash/files/` following the [FreeDesktop.org Trash specification](https://specifications.freedesktop.org/trash-spec/trashspec-latest.html). 
+Meta data is moved to `~/.local/share/Trash/info/`. If you renamed a directory and need to manually restore I suggest looking 
+through the meta data to ensure you are recovering the correct file and I also suggest you delete the meta data file 
+after you move it. Will also impliment a force restore where you can specify the exact file you want back even if it doesn't 
+match that way we can do the cleanup for you
 
 ### Metadata
 
-For each deleted file, a `.trashinfo` metadata file is created containing:
-- Original file path
-- Deletion timestamp
-- ISO 8601 formatted date
+For each deleted file, a `.trashinfo` metadata file is created and as it said above we are compliant with the speccification provided by the [FreeDesktop.org Trash specification](https://specifications.freedesktop.org/trash-spec/trashspec-latest.html). 
 
 ### Conflict Resolution
 
@@ -146,23 +145,7 @@ MIT License - See LICENSE file for details
 - Inspired by the Rust CLI tools renaissance
 - FreeDesktop.org for the Trash specification
 - The Zig community for excellent documentation and support
-
-## ⚡ Roadmap
-
-### Short Term (v0.2)
-- Complete restore functionality
-- Add configuration file support
-- Improve error messages
-
-### Medium Term (v0.3)
-- Tab completion
-- Colorized output
-- Progress bars for large operations
-
-### Long Term (v1.0)
-- Full compatibility with system trash
-- Cross-platform support (currently Linux-only)
-- Integration with file managers
+- [trash-cli](https://github.com/andreafrancia/trash-cli) was the major inspiration it was what I personally used as my rm until I wrote this
 
 ---
 
