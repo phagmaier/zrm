@@ -14,13 +14,24 @@ pub fn help() void {
     std.debug.print("--empty: Delete all files in trash\n", .{});
     std.debug.print("--clear <days>: Delete files older than specified number of days\n", .{});
     std.debug.print("--------------------------------------------------------------------------------\n", .{});
-    std.debug.print("INFO\n", .{});
-    std.debug.print("We save copies of all files deleted at current dir. If you want an older copy you can examine the files in the trash directory\n", .{});
+}
+
+fn is_sub_dir(parent: []const u8, path: []const u8) bool {
+    if (parent.len >= path.len) {
+        return false;
+    }
+    const pos_child = path[0..parent.len];
+    return std.mem.eql(u8, parent, pos_child);
 }
 
 const Flag = enum { NONE, R, HELP, DIR, RESTORE, RESTOREALL, EMPTY, CLEAR, LIST };
 
 const PathType = enum { FILE, DIR, NONE };
+
+const PathAndDate = struct {
+    path: []const u8,
+    date: []const u8,
+};
 
 pub fn getPathType(path: []const u8) PathType {
     const stat = std.fs.cwd().statFile(path) catch {
@@ -260,15 +271,93 @@ pub const Rm = struct {
         }
     }
 
-    // TODO: Implement restore functionality
+    fn move_back(self: *Rm, info_file_name: []const u8, original_path: []const u8) !void {
+        // Strip .trashinfo extension to get trash filename
+        const trash_name = info_file_name[0 .. info_file_name.len - 10]; // Remove ".trashinfo"
+
+        // Build full paths
+        const trash_file_path = try std.fmt.allocPrint(self.arena.allocator(), "{s}/{s}", .{ self.trash_path, trash_name });
+        const info_file_path = try std.fmt.allocPrint(self.arena.allocator(), "{s}/{s}", .{ self.info_path, info_file_name });
+
+        // Check if original path already exists (conflict)
+        if (getPathType(original_path) != .NONE) {
+            std.debug.print("Skipped: {s} (file already exists at original location)\n", .{std.fs.path.basename(original_path)});
+            return;
+        }
+
+        // Move file back from trash to original location
+        try std.fs.renameAbsolute(trash_file_path, original_path);
+
+        // Delete the .trashinfo file
+        try std.fs.cwd().deleteFile(info_file_path);
+
+        std.debug.print("Restored: {s}\n", .{std.fs.path.basename(original_path)});
+    }
+
+    fn restore_select(self: *Rm, arr: std.ArrayList(PathAndDate), fileNames: std.ArrayList([]const u8)) !void {
+        // Print files
+        var stdout_buffer: [4096]u8 = undefined;
+        var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+        const stdout = &stdout_writer.interface;
+
+        var count: usize = 0;
+        // Pretty print in the future
+        for (arr.items) |item| {
+            try stdout.print("{d}\t{s}\t{s}\n", .{ count, std.fs.path.basename(item.path), item.date });
+            count += 1;
+        }
+        try stdout.print("\nSelect file to restore [0..{d}]: ", .{arr.items.len - 1});
+        try stdout.flush();
+
+        // Read user input
+        var stdin_buffer: [512]u8 = undefined;
+        var stdin_reader = std.fs.File.stdin().reader(&stdin_buffer);
+        const reader = &stdin_reader.interface;
+        const line = (try reader.takeDelimiter('\n')) orelse {
+            std.debug.print("Invalid entry\n", .{});
+            return;
+        };
+
+        const parsed_uint = std.fmt.parseInt(u32, line, 10) catch {
+            std.debug.print("Invalid number\n", .{});
+            return;
+        };
+
+        if (parsed_uint >= arr.items.len) {
+            std.debug.print("Invalid entry: selection must be between 0 and {d}\n", .{arr.items.len - 1});
+            return;
+        }
+
+        try self.move_back(fileNames.items[parsed_uint], arr.items[parsed_uint].path);
+    }
+
     fn restore(self: *Rm) !void {
-        _ = self;
-        std.debug.print("TODO: Implement restore functionality\n", .{});
-        std.debug.print("This should:\n", .{});
-        std.debug.print("1. Read .trashinfo files in the info directory\n", .{});
-        std.debug.print("2. Filter for files originally from current directory\n", .{});
-        std.debug.print("3. Show interactive menu to select files to restore\n", .{});
-        std.debug.print("4. Move selected files back to original locations\n", .{});
+        var arr = std.ArrayList(PathAndDate).empty;
+        var file_names = std.ArrayList([]const u8).empty;
+        const cwd_path = try std.fs.cwd().realpathAlloc(self.arena.allocator(), ".");
+
+        var info_dir = try std.fs.openDirAbsolute(self.info_path, .{ .iterate = true });
+        defer info_dir.close();
+
+        var iter = info_dir.iterate();
+        while (try iter.next()) |entry| {
+            if (!std.mem.endsWith(u8, entry.name, ".trashinfo")) continue;
+
+            const info_file_path = try std.fmt.allocPrint(self.arena.allocator(), "{s}/{s}", .{ self.info_path, entry.name });
+            const result = try self.getFileContents(info_file_path);
+
+            if (is_sub_dir(cwd_path, result.path)) {
+                try arr.append(self.arena.allocator(), result);
+                try file_names.append(self.arena.allocator(), entry.name);
+            }
+        }
+
+        if (arr.items.len == 0) {
+            std.debug.print("No items to restore from current directory\n", .{});
+            return;
+        }
+
+        try self.restore_select(arr, file_names);
     }
 
     // TODO: Implement restoreAll functionality
@@ -365,7 +454,7 @@ pub const Rm = struct {
         return ztime.parseTimeStamp(date_str) catch null;
     }
 
-    fn getFileContents(self: *Rm, full_path: []const u8) !struct { path: []const u8, date: []const u8 } {
+    fn getFileContents(self: *Rm, full_path: []const u8) !PathAndDate {
         const file = try std.fs.cwd().openFile(full_path, .{ .mode = .read_only });
         defer file.close();
 
