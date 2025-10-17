@@ -8,6 +8,7 @@ pub fn help() void {
     std.debug.print("-r: recursive delete (directories)\n", .{});
     std.debug.print("-d, --dir: print path of where the trash dir is located\n", .{});
     std.debug.print("-h, --help: display this help message\n", .{});
+    std.debug.print("-l, --list: List all files in the trash\n", .{});
     std.debug.print("--restore: List files deleted at current directory that are not present and select which ones to restore\n", .{});
     std.debug.print("--restoreAll: restore all files from this directory that are not currently present\n", .{});
     std.debug.print("--empty: Delete all files in trash\n", .{});
@@ -17,7 +18,7 @@ pub fn help() void {
     std.debug.print("We save copies of all files deleted at current dir. If you want an older copy you can examine the files in the trash directory\n", .{});
 }
 
-const Flag = enum { NONE, R, HELP, DIR, RESTORE, RESTOREALL, EMPTY, CLEAR };
+const Flag = enum { NONE, R, HELP, DIR, RESTORE, RESTOREALL, EMPTY, CLEAR, LIST };
 
 const PathType = enum { FILE, DIR, NONE };
 
@@ -34,6 +35,10 @@ pub fn getPathType(path: []const u8) PathType {
 }
 
 pub const Rm = struct {
+    //size of string deletiondelete=
+    const DATE_STR_SIZE: usize = 13;
+    //Size of Path
+    const PATH_STR_SIZE: usize = 4;
     flag: Flag,
     paths: List,
     arena: std.heap.ArenaAllocator,
@@ -96,6 +101,8 @@ pub const Rm = struct {
             self.flag = Flag.RESTORE;
         } else if (std.mem.eql(u8, arg, "--restoreAll")) {
             self.flag = Flag.RESTOREALL;
+        } else if (std.mem.eql(u8, arg, "-l") or std.mem.eql(u8, arg, "--list")) {
+            self.flag = Flag.LIST;
         } else if (std.mem.eql(u8, arg, "--empty")) {
             self.flag = Flag.EMPTY;
         } else if (std.mem.eql(u8, arg, "--clear")) {
@@ -120,6 +127,9 @@ pub const Rm = struct {
             },
             Flag.R => {
                 try self.rmr();
+            },
+            Flag.LIST => {
+                try self.list();
             },
             Flag.RESTORE => {
                 try self.restore();
@@ -353,5 +363,47 @@ pub const Rm = struct {
 
         const date_str = content[date_start..date_end];
         return ztime.parseTimeStamp(date_str) catch null;
+    }
+
+    fn getFileContents(self: *Rm, full_path: []const u8) !struct { path: []const u8, date: []const u8 } {
+        const file = try std.fs.cwd().openFile(full_path, .{ .mode = .read_only });
+        defer file.close();
+
+        const buffer = try file.readToEndAlloc(self.arena.allocator(), std.math.maxInt(usize));
+        var iter = std.mem.splitScalar(u8, buffer, '\n');
+
+        _ = iter.first(); // Skip "[Trash Info]" line
+        const path_line = iter.next() orelse return error.InvalidFormat;
+        const date_line = iter.next() orelse return error.InvalidFormat;
+
+        // Strip "Path=" and "DeletionDate=" prefixes
+        const path = if (std.mem.startsWith(u8, path_line, "Path="))
+            path_line[5..]
+        else
+            return error.InvalidFormat;
+
+        const date = if (std.mem.startsWith(u8, date_line, "DeletionDate="))
+            date_line[13..]
+        else
+            return error.InvalidFormat;
+
+        return .{ .path = path, .date = date };
+    }
+
+    fn list(self: *Rm) !void {
+        var info_dir = try std.fs.openDirAbsolute(self.info_path, .{ .iterate = true });
+        defer info_dir.close();
+
+        var iter = info_dir.iterate();
+        while (try iter.next()) |entry| {
+            if (!std.mem.endsWith(u8, entry.name, ".trashinfo")) continue;
+
+            const info_file_path = try std.fmt.allocPrint(self.arena.allocator(), "{s}/{s}", .{ self.info_path, entry.name });
+
+            //const path, const date = try self.getFileContents(info_file_path);
+            const result = try self.getFileContents(info_file_path);
+
+            std.debug.print("{s}\t{s}\t{s}\n", .{ std.fs.path.basename(result.path), result.path, result.date });
+        }
     }
 };
