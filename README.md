@@ -23,12 +23,7 @@ Inspired by the Rust community's movement to rewrite classic Unix utilities with
 
 ### 🚧 Planned Features (In Priority Order)
 
-#### Phase 1: Core Restoration (Next)
-- 🚧 `--list` - Display all files currently in trash with details
-- 🚧 `--restore` - Interactive menu to restore deleted files
-- 🚧 `--restoreAll` - Automatically restore all non-conflicting files from current directory
-
-#### Phase 2: Enhanced Management
+####  Enhanced Management
 - 🚧 `--search <pattern>` - Find specific files in trash by name/pattern
 - 🚧 `--rm <pattern>` - Permanently delete specific items from trash
 - 🚧 `--size` - Show total size of trash directory
@@ -43,7 +38,7 @@ Inspired by the Rust community's movement to rewrite classic Unix utilities with
 
 ### Prerequisites
 
-- Zig 0.15.0 or later
+- Zig 0.15.2 or later
 
 ### Building from Source
 
@@ -181,22 +176,7 @@ This project serves as both a useful tool and a learning exercise in building pr
 
 ## 🏗️ Development Roadmap
 
-### Milestone 1: Core Trash Operations (✅ COMPLETE)
-- [x] Basic file deletion
-- [x] Recursive directory deletion
-- [x] Metadata generation
-- [x] Duplicate handling
-- [x] Empty trash
-- [x] Clear old files
-
-### Milestone 2: File Recovery (🚧 IN PROGRESS)
-- [ ] List trash contents
-- [ ] Parse and display metadata
-- [ ] Interactive restore
-- [ ] Automatic restore all
-- [ ] Search functionality
-
-### Milestone 3: Enhanced Features (📋 PLANNED)
+###  Enhanced Features (📋 PLANNED)
 - [ ] Permanent deletion from trash
 - [ ] Trash size reporting
 - [ ] Dry run mode
@@ -208,7 +188,7 @@ This project serves as both a useful tool and a learning exercise in building pr
 - [ ] Man page documentation
 - [ ] Shell completions (bash, zsh, fish)
 - [ ] Binary releases for common platforms
-- [ ] Performance benchmarks vs trash-cli
+- [ ] Performance benchmarks vs trash-cli or other similar applications
 
 ## 🤝 Contributing
 
