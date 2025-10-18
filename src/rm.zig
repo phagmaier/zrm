@@ -1,21 +1,9 @@
 const std = @import("std");
 const ztime = @import("ztime.zig");
+const Printer = @import("printer.zig").Printer;
 const List = std.ArrayList([]const u8);
 
 ///Displays the help message
-pub fn help() void {
-    std.debug.print("FLAGS:\n", .{});
-    std.debug.print("-r: recursive delete (directories)\n", .{});
-    std.debug.print("-d, --dir: print path of where the trash dir is located\n", .{});
-    std.debug.print("-h, --help: display this help message\n", .{});
-    std.debug.print("-l, --list: List all files in the trash\n", .{});
-    std.debug.print("--restore: List files deleted at current directory that are not present and select which ones to restore\n", .{});
-    std.debug.print("--restoreAll: restore all files from this directory that are not currently present\n", .{});
-    std.debug.print("--empty: Delete all files in trash\n", .{});
-    std.debug.print("--clear <days>: Delete files older than specified number of days\n", .{});
-    std.debug.print("--------------------------------------------------------------------------------\n", .{});
-}
-
 fn is_sub_dir(parent: []const u8, path: []const u8) bool {
     if (parent.len >= path.len) {
         return false;
@@ -56,8 +44,9 @@ pub const Rm = struct {
     clear_days: ?u32,
     trash_path: []const u8,
     info_path: []const u8,
+    printer: Printer,
 
-    pub fn init(allocator: std.mem.Allocator) !Rm {
+    pub fn init(allocator: std.mem.Allocator, stdout: *std.Io.Writer) !Rm {
         var arena = std.heap.ArenaAllocator.init(allocator);
         const home = try std.process.getEnvVarOwned(arena.allocator(), "HOME");
         const trash_path = try std.fmt.allocPrint(arena.allocator(), "{s}/.local/share/Trash/files", .{home});
@@ -74,7 +63,13 @@ pub const Rm = struct {
             .clear_days = null,
             .trash_path = trash_path,
             .info_path = info_path,
+            .printer = Printer.init(stdout),
         };
+    }
+
+    pub fn help(self: *Rm) !void {
+        try self.printer.help();
+        try self.printer.flush();
     }
 
     pub fn deinit(self: *Rm) void {
@@ -122,7 +117,7 @@ pub const Rm = struct {
             if (args.next()) |days_str| {
                 self.clear_days = try std.fmt.parseInt(u32, days_str, 10);
             } else {
-                std.debug.print("Error: --clear requires a number of days\n", .{});
+                try self.printer.write("Error: --clear requires a number of days\n");
                 return error.MissingClearDays;
             }
         } else {
@@ -149,7 +144,7 @@ pub const Rm = struct {
                 try self.restoreAll();
             },
             Flag.HELP => {
-                help();
+                try self.printer.help();
             },
             Flag.DIR => {
                 try self.printTrashDir();
@@ -165,7 +160,7 @@ pub const Rm = struct {
 
     ///When you call -d it will display the path of the trash
     fn printTrashDir(self: *Rm) !void {
-        std.debug.print("Trash dir: {s}\n", .{self.trash_path});
+        try self.printer.print("Trash dir: {s}\n", .{self.trash_path});
     }
 
     ///deletes both files and Dirs
@@ -177,10 +172,10 @@ pub const Rm = struct {
                     try self.movePath(path);
                 },
                 PathType.DIR => {
-                    std.debug.print("zrm: '{s}' is a directory use -r to delete directories\n", .{path});
+                    try self.printer.print("{s}zrm: '{s}' is a directory use -r to delete directories\n{s}", .{ Printer.RED, path, Printer.RESET });
                 },
                 PathType.NONE => {
-                    std.debug.print("zrm: No file or directory '{s}'\n", .{path});
+                    try self.printer.print("{s}zrm: No file or directory '{s}'\n{s}", .{ Printer.RED, path, Printer.RESET });
                 },
             }
         }
@@ -194,7 +189,7 @@ pub const Rm = struct {
                     try self.movePath(path);
                 },
                 PathType.NONE => {
-                    std.debug.print("zrm: No file or directory '{s}'\n", .{path});
+                    try self.printer.print("{s}zrm: No file or directory '{s}'\n{s}", .{ Printer.RED, path, Printer.RESET });
                 },
             }
         }
@@ -272,65 +267,67 @@ pub const Rm = struct {
     }
 
     fn move_back(self: *Rm, info_file_name: []const u8, original_path: []const u8) !void {
-        // Strip .trashinfo extension to get trash filename
-        const trash_name = info_file_name[0 .. info_file_name.len - 10]; // Remove ".trashinfo"
+        const trash_name = info_file_name[0 .. info_file_name.len - 10];
 
-        // Build full paths
         const trash_file_path = try std.fmt.allocPrint(self.arena.allocator(), "{s}/{s}", .{ self.trash_path, trash_name });
         const info_file_path = try std.fmt.allocPrint(self.arena.allocator(), "{s}/{s}", .{ self.info_path, info_file_name });
 
-        // Check if original path already exists (conflict)
+        // Check for conflict
         if (getPathType(original_path) != .NONE) {
-            std.debug.print("Skipped: {s} (file already exists at original location)\n", .{std.fs.path.basename(original_path)});
+            try self.printer.print("{s}✗{s} Skipped: {s} (already exists)\n", .{ Printer.YELLOW, Printer.RESET, std.fs.path.basename(original_path) });
             return;
         }
 
-        // Move file back from trash to original location
+        // Restore
         try std.fs.renameAbsolute(trash_file_path, original_path);
-
-        // Delete the .trashinfo file
         try std.fs.cwd().deleteFile(info_file_path);
 
-        std.debug.print("Restored: {s}\n", .{std.fs.path.basename(original_path)});
+        try self.printer.print("{s}✓{s} Restored: {s}\n", .{ Printer.GREEN, Printer.RESET, std.fs.path.basename(original_path) });
     }
 
     fn restore_select(self: *Rm, arr: std.ArrayList(PathAndDate), fileNames: std.ArrayList([]const u8)) !void {
-        // Print files
-        var stdout_buffer: [4096]u8 = undefined;
-        var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
-        const stdout = &stdout_writer.interface;
 
-        var count: usize = 0;
-        // Pretty print in the future
-        for (arr.items) |item| {
-            try stdout.print("{d}\t{s}\t{s}\n", .{ count, std.fs.path.basename(item.path), item.date });
-            count += 1;
+        // Header
+        try self.printer.print("\n{s}Files available for restore:{s}\n\n", .{ Printer.BOLD, Printer.RESET });
+        try self.printer.printTableHeader();
+
+        // Print each row
+        for (arr.items, 0..) |item, i| {
+            try self.printer.printTableRow(std.fs.path.basename(item.path), item.path, item.date, i);
         }
-        try stdout.print("\nSelect file to restore [0..{d}]: ", .{arr.items.len - 1});
-        try stdout.flush();
+
+        //try stdout.print("\n{s}Enter number to restore [0-{d}] or 'q' to quit:{s} ", .{ BOLD, arr.items.len - 1, RESET });
+        try self.printer.print("\n{s}Enter number to restore [0-{d}] or 'q' to quit:{s} ", .{ Printer.BOLD, arr.items.len - 1, Printer.RESET });
+        try self.printer.flush();
 
         // Read user input
         var stdin_buffer: [512]u8 = undefined;
         var stdin_reader = std.fs.File.stdin().reader(&stdin_buffer);
         const reader = &stdin_reader.interface;
+
         const line = (try reader.takeDelimiter('\n')) orelse {
-            std.debug.print("Invalid entry\n", .{});
+            try self.printer.print("{s}Cancelled{s}\n", .{ Printer.YELLOW, Printer.RESET });
             return;
         };
 
+        // Check for quit
+        if (std.mem.eql(u8, line, "q") or std.mem.eql(u8, line, "Q")) {
+            try self.printer.print("{s}Cancelled{s}\n", .{ Printer.YELLOW, Printer.RESET });
+            return;
+        }
+
         const parsed_uint = std.fmt.parseInt(u32, line, 10) catch {
-            std.debug.print("Invalid number\n", .{});
+            try self.printer.print("{s}Invalid number{s}\n", .{ Printer.RED, Printer.RESET });
             return;
         };
 
         if (parsed_uint >= arr.items.len) {
-            std.debug.print("Invalid entry: selection must be between 0 and {d}\n", .{arr.items.len - 1});
+            try self.printer.print("{s}Invalid selection{s}\n", .{ Printer.RED, Printer.RESET });
             return;
         }
 
         try self.move_back(fileNames.items[parsed_uint], arr.items[parsed_uint].path);
     }
-
     fn restore(self: *Rm) !void {
         var arr = std.ArrayList(PathAndDate).empty;
         var file_names = std.ArrayList([]const u8).empty;
@@ -353,27 +350,64 @@ pub const Rm = struct {
         }
 
         if (arr.items.len == 0) {
-            std.debug.print("No items to restore from current directory\n", .{});
+            try self.printer.write("No items to restore from current directory\n");
             return;
         }
 
         try self.restore_select(arr, file_names);
     }
 
-    // TODO: Implement restoreAll functionality
     fn restoreAll(self: *Rm) !void {
-        _ = self;
-        std.debug.print("TODO: Implement restoreAll functionality\n", .{});
-        std.debug.print("This should:\n", .{});
-        std.debug.print("1. Read .trashinfo files in the info directory\n", .{});
-        std.debug.print("2. Filter for files originally from current directory\n", .{});
-        std.debug.print("3. Check if files don't exist at original location\n", .{});
-        std.debug.print("4. Restore all matching files automatically\n", .{});
+        const cwd_path = try std.fs.cwd().realpathAlloc(self.arena.allocator(), ".");
+
+        var info_dir = try std.fs.openDirAbsolute(self.info_path, .{ .iterate = true });
+        defer info_dir.close();
+
+        try self.printer.print("\n{s}Restoring files from current directory...{s}\n\n", .{ Printer.BOLD, Printer.RESET });
+
+        var restored_count: u32 = 0;
+        var skipped_count: u32 = 0;
+
+        var iter = info_dir.iterate();
+        while (try iter.next()) |entry| {
+            if (!std.mem.endsWith(u8, entry.name, ".trashinfo")) continue;
+
+            const info_file_path = try std.fmt.allocPrint(self.arena.allocator(), "{s}/{s}", .{ self.info_path, entry.name });
+            const result = try self.getFileContents(info_file_path);
+
+            // Only restore files from current directory
+            if (!is_sub_dir(cwd_path, result.path)) continue;
+
+            // Check for conflict
+            if (getPathType(result.path) != .NONE) {
+                try self.printer.print("{s}✗{s} Skipped: {s} (already exists)\n", .{ Printer.YELLOW, Printer.RESET, std.fs.path.basename(result.path) });
+                skipped_count += 1;
+                continue;
+            }
+
+            // Restore this file
+            const trash_name = entry.name[0 .. entry.name.len - 10];
+            const trash_file_path = try std.fmt.allocPrint(self.arena.allocator(), "{s}/{s}", .{ self.trash_path, trash_name });
+
+            try std.fs.renameAbsolute(trash_file_path, result.path);
+
+            const info_path_full = try std.fmt.allocPrint(self.arena.allocator(), "{s}/{s}", .{ self.info_path, entry.name });
+            try std.fs.cwd().deleteFile(info_path_full);
+
+            try self.printer.print("{s}✓{s} Restored: {s}\n", .{ Printer.GREEN, Printer.RESET, std.fs.path.basename(result.path) });
+            restored_count += 1;
+        }
+
+        // Summary
+        try self.printer.print("\n{s}Summary:{s}\n", .{ Printer.BOLD, Printer.RESET });
+        try self.printer.print("  Restored: {s}{d}{s}\n", .{ Printer.GREEN, restored_count, Printer.RESET });
+        if (skipped_count > 0) {
+            try self.printer.print("  Skipped:  {s}{d}{s} (conflicts)\n", .{ Printer.YELLOW, skipped_count, Printer.RESET });
+        }
     }
 
-    // TODO: Implement empty trash functionality
     fn empty(self: *Rm) !void {
-        std.debug.print("Emptying trash...\n", .{});
+        try self.printer.print("Emptying trash...\n", .{});
 
         // Delete all files in trash directory
         var trash_dir = try std.fs.openDirAbsolute(self.trash_path, .{ .iterate = true });
@@ -393,13 +427,13 @@ pub const Rm = struct {
             try info_dir.deleteFile(entry.name);
         }
 
-        std.debug.print("Trash emptied successfully\n", .{});
+        try self.printer.print("Trash emptied successfully\n", .{});
     }
 
     // TODO: Implement clear old files functionality
     fn clear(self: *Rm) !void {
         const days = self.clear_days orelse return error.MissingClearDays;
-        std.debug.print("Clearing files older than {d} days...\n", .{days});
+        try self.printer.print("Clearing files older than {d} days...\n", .{days});
 
         var info_dir = try std.fs.openDirAbsolute(self.info_path, .{ .iterate = true });
         defer info_dir.close();
@@ -424,7 +458,8 @@ pub const Rm = struct {
                     // Try to delete as file first, then as directory
                     std.fs.deleteFileAbsolute(trash_item_path) catch {
                         std.fs.deleteTreeAbsolute(trash_item_path) catch |err| {
-                            std.debug.print("Failed to delete {s}: {}\n", .{ trash_name, err });
+                            try self.printer.print("{s}Failed to delete {s}: {}\n{s}", .{ Printer.RED, trash_name, err, Printer.RESET });
+
                             continue;
                         };
                     };
@@ -436,7 +471,8 @@ pub const Rm = struct {
             }
         }
 
-        std.debug.print("Deleted {d} old items from trash\n", .{deleted_count});
+        try self.printer.print("Deleted {d} old items from trash\n", .{deleted_count});
+        try self.printer.flush();
     }
 
     fn parseDeletionDate(self: *Rm, content: []const u8) !?i64 {
@@ -483,16 +519,25 @@ pub const Rm = struct {
         var info_dir = try std.fs.openDirAbsolute(self.info_path, .{ .iterate = true });
         defer info_dir.close();
 
+        try self.printer.print("\n{s}Trash Contents:{s}\n\n", .{ Printer.BOLD, Printer.RESET });
+        try self.printer.printTableHeader();
+
+        var count: usize = 0;
         var iter = info_dir.iterate();
         while (try iter.next()) |entry| {
             if (!std.mem.endsWith(u8, entry.name, ".trashinfo")) continue;
 
             const info_file_path = try std.fmt.allocPrint(self.arena.allocator(), "{s}/{s}", .{ self.info_path, entry.name });
-
-            //const path, const date = try self.getFileContents(info_file_path);
             const result = try self.getFileContents(info_file_path);
 
-            std.debug.print("{s}\t{s}\t{s}\n", .{ std.fs.path.basename(result.path), result.path, result.date });
+            try self.printer.printTableRow(std.fs.path.basename(result.path), result.path, result.date, count);
+            count += 1;
+        }
+
+        if (count == 0) {
+            try self.printer.print("\n{s}Trash is empty{s}\n", .{ Printer.DIM, Printer.RESET });
+        } else {
+            try self.printer.print("\n{s}Total: {d} items{s}\n", .{ Printer.DIM, count, Printer.RESET });
         }
     }
 };
